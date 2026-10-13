@@ -1,0 +1,12 @@
+Create a 2D physics simulation of a volcano erupting, in a single self-contained HTML file. No external libraries: everything inline, rendered on a canvas.
+
+Requirements:
+
+Side view: a volcano cone with a crater, ground, and sky.
+A pressure meter that builds over time; when it maxes out, the volcano erupts, then pressure resets and builds again on its own.
+Eruptions launch glowing lava particles from the crater with varied velocities. Particles follow gravity in a realistic arc, land on the slopes, and slide or settle downhill.
+Lava cools over its lifetime: bright yellow-orange when launched, fading to dark rock, then disappearing.
+An ash cloud of smoke particles that rises from the crater and drifts with the wind.
+Three sliders the user can move while it runs: eruption power, wind strength and direction, and particle amount.
+A live on-screen counter showing active particle count and frames per second. The simulation must stay smooth with at least 1000 active particles.
+Output only the complete HTML file.
