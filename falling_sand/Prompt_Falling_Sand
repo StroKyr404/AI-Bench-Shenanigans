@@ -1,1 +1,11 @@
 Prompt_Falling_Sand
+
+Create a 2D grid-based falling sand simulation (cellular automaton), in a single self-contained HTML file. No external libraries: everything inline, rendered on a canvas.
+Requirements:
+A pixel-art style grid of at least 200x200 cells scaled up to fit the screen.
+Four selectable materials for the user to paint with using the mouse: Sand, Water, Wood, and Fire.
+Physics rules: Sand falls down and slides down diagonal slopes. Water spreads out horizontally and falls. Wood is static.
+Interaction rules: Fire burns Wood (turns it to empty space over a few frames). Water puts out Fire. Sand sinks in Water.
+A UI bar at the top or bottom with buttons to select the current drawing material, and a slider to change the brush size.
+A live on-screen counter showing active particles (non-empty cells) and frames per second. The update loop must process the grid efficiently from bottom to top to avoid particle tearing.
+Output only the complete HTML file.
