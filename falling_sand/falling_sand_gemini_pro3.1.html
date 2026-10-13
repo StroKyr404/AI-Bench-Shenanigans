@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Falling Sand Simulation</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #fff;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #canvas-container {
+            background-color: #000;
+            border: 2px solid #444;
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-panel {
+            background-color: #2a2a2a;
+            padding: 15px 25px;
+            border-radius: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #444;
+        }
+        .btn-group {
+            display: flex;
+            gap: 5px;
+        }
+        button {
+            background-color: #444;
+            color: #fff;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+        button:hover {
+            background-color: #555;
+        }
+        button:active {
+            transform: scale(0.95);
+        }
+        button.active {
+            background-color: #4CAF50;
+            color: white;
+            box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        input[type="range"] {
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div id="ui-panel">
+        <div class="btn-group" id="tools">
+            <button class="tool-btn active" data-type="1">Sand</button>
+            <button class="tool-btn" data-type="2">Water</button>
+            <button class="tool-btn" data-type="3">Plant</button>
+            <button class="tool-btn" data-type="4">Fire</button>
+            <button class="tool-btn" data-type="0">Eraser</button>
+        </div>
+        <div class="control-group">
+            <label for="brushSize">Brush Size: <span id="brushSizeVal">3</span></label>
+            <input type="range" id="brushSize" min="1" max="10" value="3">
+        </div>
+        <button id="clearBtn" style="background-color: #d32f2f;">Clear Canvas</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Simulation parameters
+        const CELL_SIZE = 4;
+        const COLS = 150;
+        const ROWS = 150;
+
+        canvas.width = COLS * CELL_SIZE;
+        canvas.height = ROWS * CELL_SIZE;
+
+        // Element Types
+        const EMPTY = 0;
+        const SAND = 1;
+        const WATER = 2;
+        const PLANT = 3;
+        const FIRE = 4;
+        const STEAM = 5;
+
+        // Grid initialization
+        let grid = createGrid();
+        let frameCount = 0;
+
+        // Input state
+        let currentTool = SAND;
+        let brushSize = 3;
+        let isDrawing = false;
+        let mouseX = 0;
+        let mouseY = 0;
+
+        function createGrid() {
+            const newGrid = new Array(ROWS);
+            for (let y = 0; y < ROWS; y++) {
+                newGrid[y] = new Array(COLS);
+                for (let x = 0; x < COLS; x++) {
+                    newGrid[y][x] = createCell(EMPTY);
+                }
+            }
+            return newGrid;
+        }
+
+        function createCell(type) {
+            let color = '';
+            let life = 0;
+
+            // Generate slight color variations per spawned pixel
+            const vary = (base, range) => Math.max(0, Math.min(255, base + Math.floor(Math.random() * range - range/2)));
+
+            switch(type) {
+                case SAND:
+                    color = `rgb(${vary(210, 40)}, ${vary(180, 30)}, ${vary(100, 20)})`; // Sandy colors
+                    break;
+                case WATER:
+                    color = `rgba(${vary(30, 20)}, ${vary(120, 30)}, ${vary(220, 40)}, 0.8)`; // Blue with opacity
+                    break;
+                case PLANT:
+                    color = `rgb(${vary(30, 20)}, ${vary(160, 40)}, ${vary(40, 20)})`; // Greens
+                    break;
+                case FIRE:
+                    color = `rgb(${vary(255, 0)}, ${vary(100, 80)}, ${vary(20, 20)})`; // Oranges/Reds
+                    life = Math.random() * 60 + 20; // Fire burns out over frames
+                    break;
+                case STEAM:
+                    color = `rgba(200, 200, 200, ${Math.random() * 0.3 + 0.2})`; // Semi-transparent whites
+                    life = Math.random() * 100 + 50; // Steam dissipates eventually or condenses
+                    break;
+                default:
+                    color = '#000000';
+            }
+
+            return {
+                type: type,
+                color: color,
+                life: life,
+                updated: false // Prevent double updating in a single frame
+            };
+        }
+
+        // Helper functions for bounds checking and getting cells
+        const inBounds = (x, y) => x >= 0 && x < COLS && y >= 0 && y < ROWS;
+        const isEmpty = (x, y) => inBounds(x, y) && grid[y][x].type === EMPTY;
+        const isFluid = (x, y) => inBounds(x, y) && (grid[y][x].type === EMPTY || grid[y][x].type === WATER || grid[y][x].type === STEAM);
+        const isGas = (x, y) => inBounds(x, y) && (grid[y][x].type === EMPTY || grid[y][x].type === STEAM);
+
+        function swap(x1, y1, x2, y2) {
+            const temp = grid[y1][x1];
+            grid[y1][x1] = grid[y2][x2];
+            grid[y2][x2] = temp;
+            grid[y1][x1].updated = true;
+            grid[y2][x2].updated = true;
+        }
+
+        function setCell(x, y, type) {
+            if (inBounds(x, y)) {
+                grid[y][x] = createCell(type);
+                grid[y][x].updated = true;
+            }
+        }
+
+        // Core Update Logic
+        function update() {
+            // Reset update flags
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    grid[y][x].updated = false;
+                }
+            }
+
+            // Update bottom to top
+            for (let y = ROWS - 1; y >= 0; y--) {
+                // Alternate horizontal scanning direction to prevent diagonal bias
+                const dir = (frameCount % 2 === 0) ? 1 : -1;
+                const startX = (dir === 1) ? 0 : COLS - 1;
+                const endX = (dir === 1) ? COLS : -1;
+
+                for (let x = startX; x !== endX; x += dir) {
+                    const cell = grid[y][x];
+                    if (cell.type === EMPTY || cell.updated) continue;
+
+                    const down = y + 1;
+                    const up = y - 1;
+                    const left = x - 1;
+                    const right = x + 1;
+
+                    // --- SAND LOGIC ---
+                    if (cell.type === SAND) {
+                        if (inBounds(x, down) && isFluid(x, down) && grid[down][x].type !== SAND) {
+                            swap(x, y, x, down);
+                        } else {
+                            // Try diagonals randomly
+                            const fallLeft = Math.random() > 0.5;
+                            if (fallLeft && inBounds(left, down) && isFluid(left, down) && grid[down][left].type !== SAND) {
+                                swap(x, y, left, down);
+                            } else if (!fallLeft && inBounds(right, down) && isFluid(right, down) && grid[down][right].type !== SAND) {
+                                swap(x, y, right, down);
+                            }
+                        }
+                    }
+
+                    // --- WATER LOGIC ---
+                    else if (cell.type === WATER) {
+                        // Chance to grow plant if touching sand
+                        if (inBounds(x, down) && grid[down][x].type === SAND && Math.random() < 0.005) {
+                            setCell(x, y, PLANT);
+                            continue;
+                        }
+
+                        if (inBounds(x, down) && isGas(x, down)) {
+                            swap(x, y, x, down);
+                        } else {
+                            const fallLeft = Math.random() > 0.5;
+                            if (fallLeft && inBounds(left, down) && isGas(left, down)) {
+                                swap(x, y, left, down);
+                            } else if (!fallLeft && inBounds(right, down) && isGas(right, down)) {
+                                swap(x, y, right, down);
+                            } else {
+                                // Disperse horizontally
+                                const moveLeft = Math.random() > 0.5;
+                                if (moveLeft && inBounds(left, y) && isGas(left, y)) {
+                                    swap(x, y, left, y);
+                                } else if (!moveLeft && inBounds(right, y) && isGas(right, y)) {
+                                    swap(x, y, right, y);
+                                }
+                            }
+                        }
+                    }
+
+                    // --- FIRE LOGIC ---
+                    else if (cell.type === FIRE) {
+                        cell.life--;
+                        if (cell.life <= 0) {
+                            setCell(x, y, EMPTY);
+                            continue;
+                        }
+
+                        // Check neighbors for interactions
+                        const neighbors = [
+                            {nx: x, ny: up}, {nx: x, ny: down}, {nx: left, ny: y}, {nx: right, ny: y}
+                        ];
+
+                        for (let n of neighbors) {
+                            if (!inBounds(n.nx, n.ny)) continue;
+                            const neighbor = grid[n.ny][n.nx];
+
+                            // Fire destroys plant
+                            if (neighbor.type === PLANT) {
+                                setCell(n.nx, n.ny, FIRE); // Spreads
+                            }
+                            // Fire touches water -> Steam
+                            else if (neighbor.type === WATER) {
+                                setCell(x, y, STEAM);
+                                setCell(n.nx, n.ny, STEAM);
+                                break;
+                            }
+                        }
+
+                        // Fire rises slightly
+                        if (cell.type === FIRE && Math.random() < 0.3 && inBounds(x, up) && isEmpty(x, up)) {
+                            swap(x, y, x, up);
+                        }
+                    }
+
+                    // --- STEAM LOGIC ---
+                    else if (cell.type === STEAM) {
+                        cell.life--;
+                        // Condense at top
+                        if (y <= 1 || cell.life <= 0) {
+                            if (Math.random() < 0.1) {
+                                setCell(x, y, WATER);
+                            } else {
+                                setCell(x, y, EMPTY);
+                            }
+                            continue;
+                        }
+
+                        // Rises
+                        if (inBounds(x, up) && isEmpty(x, up)) {
+                            swap(x, y, x, up);
+                        } else {
+                            const riseLeft = Math.random() > 0.5;
+                            if (riseLeft && inBounds(left, up) && isEmpty(left, up)) {
+                                swap(x, y, left, up);
+                            } else if (!riseLeft && inBounds(right, up) && isEmpty(right, up)) {
+                                swap(x, y, right, up);
+                            } else {
+                                // Disperse horizontally
+                                const moveLeft = Math.random() > 0.5;
+                                if (moveLeft && inBounds(left, y) && isEmpty(left, y)) {
+                                    swap(x, y, left, y);
+                                } else if (!moveLeft && inBounds(right, y) && isEmpty(right, y)) {
+                                    swap(x, y, right, y);
+                                }
+                            }
+                        }
+                    }
+
+                    // PLANT is static, needs no update logic here
+                }
+            }
+            frameCount++;
+        }
+
+        // Drawing
+        function draw() {
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    const cell = grid[y][x];
+                    if (cell.type !== EMPTY) {
+                        ctx.fillStyle = cell.color;
+
+                        // Adding slight glow for fire via standard drawing,
+                        // shadowBlur is too expensive for 22,500 cells every frame.
+                        // We simulate it by just having bright randomized colors and slightly larger rects randomly
+                        if (cell.type === FIRE && Math.random() > 0.5) {
+                            ctx.fillRect(x * CELL_SIZE - 1, y * CELL_SIZE - 1, CELL_SIZE + 2, CELL_SIZE + 2);
+                        } else {
+                            ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        }
+                    }
+                }
+            }
+        }
+
+        function drawBrushRadius() {
+            if (mouseX >= 0 && mouseX < canvas.width && mouseY >= 0 && mouseY < canvas.height) {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.beginPath();
+                ctx.arc(mouseX, mouseY, brushSize * CELL_SIZE, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        // Main Loop
+        function loop() {
+            handleInput();
+            update();
+            draw();
+            drawBrushRadius();
+            requestAnimationFrame(loop);
+        }
+
+        // Input Handling
+        function handleInput() {
+            if (!isDrawing) return;
+
+            const gridX = Math.floor(mouseX / CELL_SIZE);
+            const gridY = Math.floor(mouseY / CELL_SIZE);
+
+            // Draw a circle of particles
+            for (let y = -brushSize; y <= brushSize; y++) {
+                for (let x = -brushSize; x <= brushSize; x++) {
+                    if (x*x + y*y <= brushSize*brushSize) {
+                        const targetX = gridX + x;
+                        const targetY = gridY + y;
+                        if (inBounds(targetX, targetY)) {
+                            // Don't override everything instantly if placing falling elements (makes it flow better)
+                            if (currentTool === EMPTY || Math.random() > 0.2) {
+                                setCell(targetX, targetY, currentTool);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Event Listeners
+        canvas.addEventListener('mousedown', (e) => { isDrawing = true; updateMousePos(e); });
+        canvas.addEventListener('mousemove', (e) => { updateMousePos(e); });
+        window.addEventListener('mouseup', () => { isDrawing = false; });
+
+        // Touch support
+        canvas.addEventListener('touchstart', (e) => { isDrawing = true; updateMousePos(e.touches[0]); e.preventDefault(); }, {passive: false});
+        canvas.addEventListener('touchmove', (e) => { updateMousePos(e.touches[0]); e.preventDefault(); }, {passive: false});
+        window.addEventListener('touchend', () => { isDrawing = false; });
+
+        function updateMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        }
+
+        // UI Listeners
+        document.querySelectorAll('.tool-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                currentTool = parseInt(e.target.dataset.type);
+            });
+        });
+
+        document.getElementById('brushSize').addEventListener('input', (e) => {
+            brushSize = parseInt(e.target.value);
+            document.getElementById('brushSizeVal').innerText = brushSize;
+        });
+
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            grid = createGrid();
+        });
+
+        // Start simulation
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>

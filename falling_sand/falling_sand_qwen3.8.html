@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Falling Sand</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0a0a12;font-family:'Courier New',monospace}
+  #ui{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    padding:8px 12px;background:#14141f;border-bottom:2px solid #2a2a3a;
+    user-select:none;-webkit-user-select:none;
+  }
+  #ui button{
+    background:#22222f;color:#cfcfe6;border:2px solid #33334a;
+    padding:6px 14px;border-radius:4px;cursor:pointer;font-family:inherit;
+    font-size:13px;transition:background .1s,border-color .1s;
+  }
+  #ui button:hover{background:#2c2c40}
+  #ui button.active{background:#3a3a5c;border-color:#7b7bff;color:#fff}
+  #ui label{color:#9a9ab5;font-size:13px;display:flex;align-items:center;gap:6px}
+  #ui input[type=range]{width:100px;accent-color:#7b7bff}
+  .sep{width:1px;height:24px;background:#2a2a3a;margin:0 4px}
+  #stats{margin-left:auto;color:#8affc0;font-size:13px;white-space:nowrap;min-width:200px;text-align:right}
+  #wrap{
+    width:100%;height:calc(100% - 46px);
+    display:flex;align-items:center;justify-content:center;background:#0a0a12;
+  }
+  canvas{
+    image-rendering:pixelated;image-rendering:crisp-edges;
+    background:#0a0a12;cursor:crosshair;touch-action:none;
+  }
+</style>
+</head>
+<body>
+<div id="ui">
+  <button data-mat="SAND"   class="active">Sand</button>
+  <button data-mat="WATER">Water</button>
+  <button data-mat="WOOD" >Wood</button>
+  <button data-mat="FIRE" >Fire</button>
+  <div class="sep"></div>
+  <button data-mat="EMPTY">Erase</button>
+  <div class="sep"></div>
+  <label>Brush
+    <input type="range" id="brushSlider" min="1" max="25" value="4">
+    <span id="brushVal">4</span>
+  </label>
+  <span id="stats">Particles: 0 | FPS: 0</span>
+</div>
+<div id="wrap"><canvas id="cv" width="200" height="200"></canvas></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── constants ─────────────────────────────────────────────── */
+  const W = 200, H = 200;
+  const EMPTY = 0, SAND = 1, WATER = 2, WOOD = 3, FIRE = 4;
+  const BURN_MAX = 20;          // frames for wood to fully burn
+  const BURN_INC = 4;           // burn added per adjacent fire per tick
+
+  /* ── state ─────────────────────────────────────────────────── */
+  const grid     = new Uint8Array(W * H);
+  const fireLife = new Uint8Array(W * H);
+  const woodBurn = new Uint8Array(W * H);
+  const moved    = new Uint8Array(W * H);
+
+  // per-cell colour jitter (static noise for pixel-art feel)
+  const noise = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) noise[i] = (Math.random() * 256) | 0;
+
+  /* ── canvas ────────────────────────────────────────────────── */
+  const canvas = document.getElementById("cv");
+  const ctx    = canvas.getContext("2d");
+  const img    = ctx.createImageData(W, H);
+  const px     = img.data;                       // Uint8ClampedArray
+
+  function resize() {
+    const wrap = document.getElementById("wrap");
+    const s = Math.max(60, Math.min(wrap.clientWidth - 12, wrap.clientHeight - 12));
+    canvas.style.width  = s + "px";
+    canvas.style.height = s + "px";
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  /* ── helpers ───────────────────────────────────────────────── */
+  const idx = (x, y) => y * W + x;
+
+  function inB(x, y) { return x >= 0 && x < W && y >= 0 && y < H; }
+
+  function getM(x, y) { return inB(x, y) ? grid[idx(x, y)] : 0; }
+
+  /* swap two cells and mark destination as moved */
+  function swap(i, j, a, b) {
+    grid[i] = b;
+    grid[j] = a;
+    moved[j] = 1;
+  }
+
+  /* ── material updates ──────────────────────────────────────── */
+
+  function updSand(x, y) {
+    if (y + 1 >= H) return;
+    const i = idx(x, y);
+    const b = i + W;
+    const bm = grid[b];
+
+    if (bm === EMPTY || bm === WATER) { swap(i, b, SAND, bm); return; }
+
+    // diagonal
+    const l = x > 0     ? b - 1 : -1;
+    const r = x < W - 1 ? b + 1 : -1;
+    if (Math.random() < 0.5) {
+      if (l !== -1 && (grid[l] === EMPTY || grid[l] === WATER)) { swap(i, l, SAND, grid[l]); return; }
+      if (r !== -1 && (grid[r] === EMPTY || grid[r] === WATER)) { swap(i, r, SAND, grid[r]); return; }
+    } else {
+      if (r !== -1 && (grid[r] === EMPTY || grid[r] === WATER)) { swap(i, r, SAND, grid[r]); return; }
+      if (l !== -1 && (grid[l] === EMPTY || grid[l] === WATER)) { swap(i, l, SAND, grid[l]); return; }
+    }
+  }
+
+  function updWater(x, y) {
+    const i = idx(x, y);
+
+    // fall straight down
+    if (y + 1 < H && grid[i + W] === EMPTY) { swap(i, i + W, WATER, EMPTY); return; }
+
+    // diagonal down
+    if (y + 1 < H) {
+      const b = i + W;
+      const l = x > 0     ? b - 1 : -1;
+      const r = x < W - 1 ? b + 1 : -1;
+      if (Math.random() < 0.5) {
+        if (l !== -1 && grid[l] === EMPTY) { swap(i, l, WATER, EMPTY); return; }
+        if (r !== -1 && grid[r] === EMPTY) { swap(i, r, WATER, EMPTY); return; }
+      } else {
+        if (r !== -1 && grid[r] === EMPTY) { swap(i, r, WATER, EMPTY); return; }
+        if (l !== -1 && grid[l] === EMPTY) { swap(i, l, WATER, EMPTY); return; }
+      }
+    }
+
+    // horizontal spread
+    const l = x > 0     ? i - 1 : -1;
+    const r = x < W - 1 ? i + 1 : -1;
+    if (Math.random() < 0.5) {
+      if (l !== -1 && grid[l] === EMPTY) { swap(i, l, WATER, EMPTY); return; }
+      if (r !== -1 && grid[r] === EMPTY) { swap(i, r, WATER, EMPTY); return; }
+    } else {
+      if (r !== -1 && grid[r] === EMPTY) { swap(i, r, WATER, EMPTY); return; }
+      if (l !== -1 && grid[l] === EMPTY) { swap(i, l, WATER, EMPTY); return; }
+    }
+  }
+
+  function updWood(x, y) {
+    const i = idx(x, y);
+    if (woodBurn[i] > 0) {
+      woodBurn[i] = Math.min(255, woodBurn[i] + 1);
+      if (woodBurn[i] >= BURN_MAX) {
+        grid[i] = EMPTY;
+        woodBurn[i] = 0;
+        // small chance to leave a fire ember
+        if (Math.random() < 0.35) {
+          grid[i] = FIRE;
+          fireLife[i] = 40 + ((Math.random() * 40) | 0);
+        }
+      }
+    }
+  }
+
+  function incBurn(x, y) {
+    if (!inB(x, y) || grid[idx(x, y)] !== WOOD) return;
+    const i = idx(x, y);
+    woodBurn[i] = Math.min(255, woodBurn[i] + BURN_INC);
+  }
+
+  function updFire(x, y) {
+    const i = idx(x, y);
+
+    // water extinguishes
+    if (getM(x - 1, y) === WATER || getM(x + 1, y) === WATER ||
+        getM(x, y - 1) === WATER || getM(x, y + 1) === WATER) {
+      grid[i] = EMPTY; fireLife[i] = 0; return;
+    }
+
+    // ignite adjacent wood
+    incBurn(x - 1, y);
+    incBurn(x + 1, y);
+    incBurn(x, y - 1);
+    incBurn(x, y + 1);
+
+    // consume
+    if (fireLife[i] > 0) fireLife[i]--;
+    if (fireLife[i] === 0) { grid[i] = EMPTY; fireLife[i] = 0; }
+  }
+
+  /* ── main simulation step (bottom → top) ───────────────────── */
+  function step() {
+    moved.fill(0);
+    for (let y = H - 1; y >= 0; y--) {
+      const row = y * W;
+      for (let x = 0; x < W; x++) {
+        const i = row + x;
+        if (moved[i]) continue;
+        const m = grid[i];
+        if (m === SAND)       updSand(x, y);
+        else if (m === WATER) updWater(x, y);
+        else if (m === WOOD)  updWood(x, y);
+        else if (m === FIRE)  updFire(x, y);
+      }
+    }
+  }
+
+  /* ── rendering ─────────────────────────────────────────────── */
+  function render() {
+    for (let i = 0; i < W * H; i++) {
+      const m = grid[i];
+      const n = noise[i] / 255;
+      let r, g, b;
+
+      switch (m) {
+        case EMPTY:
+          r = 10; g = 11; b = 20; break;
+
+        case SAND: {
+          const s = 0.80 + 0.40 * n;
+          r = 225 * s; g = 192 * s; b = 105 * s; break;
+        }
+
+        case WATER: {
+          const s = 0.65 + 0.45 * n;
+          r = 35 * s; g = 115 * s; b = 220 * s; break;
+        }
+
+        case WOOD: {
+          const t = Math.min(1, woodBurn[i] / BURN_MAX);
+          const s = 0.75 + 0.40 * n;
+          r = (110 + 140 * t) * s;
+          g = ( 68 -  20 * t) * s;
+          b = ( 38 -  18 * t) * s; break;
+        }
+
+        case FIRE: {
+          const life = fireLife[i] / 255;
+          const f  = 0.55 + 0.55 * n;
+          r = 255 * f;
+          g = (50 + 180 * life) * f;
+          b = 25  * f; break;
+        }
+      }
+
+      const p = i << 2;
+      px[p] = r; px[p + 1] = g; px[p + 2] = b; px[p + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  /* ── painting ──────────────────────────────────────────────── */
+  let curMat  = SAND;
+  let brushR  = 4;
+  let painting = false;
+
+  function gridPos(e) {
+    const rc = canvas.getBoundingClientRect();
+    return [
+      Math.floor((e.clientX - rc.left) / rc.width  * W),
+      Math.floor((e.clientY - rc.top)  / rc.height * H)
+    ];
+  }
+
+  function stamp(e) {
+    const [gx, gy] = gridPos(e);
+    for (let dy = -brushR; dy <= brushR; dy++) {
+      for (let dx = -brushR; dx <= brushR; dx++) {
+        if (dx * dx + dy * dy > brushR * brushR) continue;
+        const x = gx + dx, y = gy + dy;
+        if (!inB(x, y)) continue;
+        const i = idx(x, y);
+        grid[i] = curMat;
+        fireLife[i] = (curMat === FIRE) ? (100 + ((Math.random() * 100) | 0)) : 0;
+        woodBurn[i] = 0;
+      }
+    }
+  }
+
+  canvas.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    painting = true;
+    canvas.setPointerCapture(e.pointerId);
+    stamp(e);
+  });
+  canvas.addEventListener("pointermove", e => { if (painting) stamp(e); });
+  canvas.addEventListener("pointerup",     e => { painting = false; });
+  canvas.addEventListener("pointercancel", () => { painting = false; });
+
+  /* ── UI wiring ─────────────────────────────────────────────── */
+  const btns = document.querySelectorAll("#ui button[data-mat]");
+  const MAT_MAP = { SAND: SAND, WATER: WATER, WOOD: WOOD, FIRE: FIRE, EMPTY: EMPTY };
+
+  btns.forEach(b => b.addEventListener("click", () => {
+    curMat = MAT_MAP[b.dataset.mat];
+    btns.forEach(x => x.classList.toggle("active", x === b));
+  }));
+
+  const slider = document.getElementById("brushSlider");
+  const bVal   = document.getElementById("brushVal");
+  slider.addEventListener("input", () => {
+    brushR = +slider.value;
+    bVal.textContent = brushR;
+  });
+
+  /* ── stats ─────────────────────────────────────────────────── */
+  const statsEl = document.getElementById("stats");
+  let frames = 0, tPrev = performance.now();
+
+  function tickStats(now) {
+    frames++;
+    if (now - tPrev >= 500) {
+      const fps = Math.round(frames * 1000 / (now - tPrev));
+      frames = 0; tPrev = now;
+      let cnt = 0;
+      for (let i = 0; i < W * H; i++) if (grid[i] !== EMPTY) cnt++;
+      statsEl.textContent = "Particles: " + cnt + " | FPS: " + fps;
+    }
+  }
+
+  /* ── demo scene ────────────────────────────────────────────── */
+  (function seed() {
+    // wooden shelf
+    for (let y = 148; y < 155; y++)
+      for (let x = 75; x < 125; x++) grid[idx(x, y)] = WOOD;
+
+    // sand pile on shelf
+    for (let x = 90; x < 112; x++)
+      for (let y = 136; y < 148; y++)
+        if (Math.abs(x - 101) < (148 - y)) grid[idx(x, y)] = SAND;
+
+    // water pool
+    for (let x = 25; x < 65; x++)
+      for (let y = 165; y < 195; y++) grid[idx(x, y)] = WATER;
+
+    // fire near the wood
+    for (let x = 118; x < 124; x++) {
+      grid[idx(x, 146)] = FIRE; fireLife[idx(x, 146)] = 150;
+      grid[idx(x, 147)] = FIRE; fireLife[idx(x, 147)] = 150;
+    }
+  })();
+
+  /* ── main loop ─────────────────────────────────────────────── */
+  function loop(now) {
+    step();
+    render();
+    tickStats(now);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
